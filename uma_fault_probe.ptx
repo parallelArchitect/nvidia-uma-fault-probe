@@ -1,0 +1,84 @@
+//
+// uma_fault_probe.ptx
+// UMA Page Fault Latency Probe for GB10 and discrete GPU platforms
+// Target: compute_80+ (JIT compiled to sm_120 on GB10 by driver)
+// Author: parallelArchitect
+//
+// What this measures:
+//   Cycle-accurate latency of unified memory page faults
+//   using %clock64 before and after ld.global on unresided pages.
+//   No CUPTI. No NVML. Ground truth from inside the kernel.
+//
+
+.version 6.0
+.target compute_60
+.address_size 64
+
+//
+// Kernel: uma_fault_probe_kernel
+//
+// Parameters:
+//   data_ptr   - unified memory buffer (touched by CPU before launch)
+//   latency    - output array (one u64 per thread)
+//   n_elements - number of elements in data buffer
+//
+.visible .entry uma_fault_probe_kernel(
+    .param .u64 param_data,
+    .param .u64 param_latency,
+    .param .u64 param_n
+)
+{
+    .reg .u64   %rd<8>;
+    .reg .u32   %r<6>;
+    .reg .u64   %clock_before;
+    .reg .u64   %clock_after;
+    .reg .u64   %latency_val;
+    .reg .f32   %f<2>;
+    .reg .pred  %p0;
+
+    // Load parameters
+    ld.param.u64    %rd1, [param_data];
+    ld.param.u64    %rd2, [param_latency];
+    ld.param.u64    %rd3, [param_n];
+
+    // Compute global thread index
+    mov.u32         %r1, %tid.x;
+    mov.u32         %r2, %ntid.x;
+    mov.u32         %r3, %ctaid.x;
+    mad.lo.u32      %r4, %r3, %r2, %r1;
+
+    // Bounds check
+    cvt.u64.u32     %rd4, %r4;
+    setp.ge.u64     %p0, %rd4, %rd3;
+    @%p0 bra        DONE;
+
+    // Compute address of data[thread_id]
+    mul.wide.u32    %rd5, %r4, 4;        // offset = thread_id * 4 bytes
+    add.u64         %rd5, %rd1, %rd5;    // addr = base + offset
+    cvta.to.global.u64 %rd5, %rd5;       // convert to global space
+
+    // --- MEASUREMENT START ---
+    // Read cycle counter BEFORE the load
+    // This load may trigger a UMA page fault on GB10
+    mov.u64         %clock_before, %clock64;
+
+    // The load that may trigger migration
+    // .cv = cache volatile, bypass L1/L2, force memory access
+    ld.global.cv.f32  %f1, [%rd5];
+
+    // Read cycle counter AFTER the load
+    mov.u64         %clock_after, %clock64;
+    // --- MEASUREMENT END ---
+
+    // Compute latency = after - before
+    sub.u64         %latency_val, %clock_after, %clock_before;
+
+    // Store latency[thread_id] = latency_val
+    mul.wide.u32    %rd6, %r4, 8;        // offset = thread_id * 8 bytes
+    add.u64         %rd6, %rd2, %rd6;    // addr = latency_base + offset
+    cvta.to.global.u64 %rd6, %rd6;
+    st.global.u64   [%rd6], %latency_val;
+
+DONE:
+    ret;
+}
