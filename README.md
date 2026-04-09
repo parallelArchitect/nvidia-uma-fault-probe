@@ -62,29 +62,35 @@ Most tools abstract the hardware. These stay close to it.
 
 Requirements: CUDA 12.x or 13.x, C++17, Linux (x86_64 or aarch64)
 
-uma_probe — UMA Fault Latency Probe
+### uma_probe — UMA Fault Latency Probe
 
-x86_64:
+```bash
+# x86_64:
 nvcc -O2 -std=c++17 probe_launcher.cu -o uma_probe -lcudart -lcuda
 
-aarch64 (GB10 DGX Spark):
+# aarch64 (GB10 DGX Spark):
 nvcc -O2 -std=c++17 probe_launcher.cu -o uma_probe -lcudart -lcuda -lpthread
+```
 
-uma_bw — UMA Bandwidth Test
+### uma_bw — UMA Bandwidth Test
 
-x86_64:
+```bash
+# x86_64:
 nvcc -O2 -std=c++17 uma_bandwidth_test.cu -o uma_bw -lcudart
 
-aarch64 (GB10 DGX Spark):
+# aarch64 (GB10 DGX Spark):
 nvcc -O2 -std=c++17 uma_bandwidth_test.cu -o uma_bw -lcudart -lpthread
+```
 
 ## Run
 
+```bash
 ./uma_probe              — human-readable output + JSON log
 ./uma_probe --json-only  — JSON only
 
 ./uma_bw                 — human-readable output + JSON log
 ./uma_bw --json-only     — JSON only
+```
 
 uma_fault_probe.ptx must remain in the same directory as uma_probe.
 
