@@ -1,0 +1,131 @@
+//
+// uma_atomic_probe.ptx
+// UMA Atomic Coherence Latency Probe
+// Target: compute_60 (PTX portable — JIT compiled to native SASS by driver at runtime)
+// Author: parallelArchitect
+//
+// What this measures:
+// Cycle-accurate latency of atomic operations at different scopes
+// using %clock64 before and after atom.global on managed memory.
+//
+// Three passes:
+//   GPU-scope  : atom.global.gpu.add.u32 — stays within GPU memory system
+//   SYS-scope  : atom.global.sys.add.u32 — traverses coherence protocol
+//   CONTENTION : atom.global.sys.add.u32 with concurrent CPU access
+//
+// On discrete PCIe: gpu-scope ~= sys-scope (no coherence protocol)
+// On GB10 coherent UMA: sys-scope >> gpu-scope (NVLink-C2C coherence cost)
+// The delta is the coherence protocol overhead — unpublished on GB10.
+//
+// No CUPTI. No NVML. Ground truth from inside the kernel.
+//
+
+.version 6.0
+.target compute_60
+.address_size 64
+
+//
+// Kernel: uma_atomic_gpu_kernel
+// GPU-scope atomic — atom.global.gpu
+// Baseline: no coherence protocol involvement
+//
+.visible .entry uma_atomic_gpu_kernel(
+    .param .u64 param_data,
+    .param .u64 param_latency,
+    .param .u64 param_n
+)
+{
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<6>;
+    .reg .u32 %result;
+    .reg .u64 %clock_before;
+    .reg .u64 %clock_after;
+    .reg .u64 %latency_val;
+    .reg .pred %p0;
+
+    ld.param.u64 %rd1, [param_data];
+    ld.param.u64 %rd2, [param_latency];
+    ld.param.u64 %rd3, [param_n];
+
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ntid.x;
+    mov.u32 %r3, %ctaid.x;
+    mad.lo.u32 %r4, %r3, %r2, %r1;
+
+    cvt.u64.u32 %rd4, %r4;
+    setp.ge.u64 %p0, %rd4, %rd3;
+    @%p0 bra DONE_GPU;
+
+    // Each thread atomics its own element — no contention between threads
+    mul.wide.u32 %rd5, %r4, 4;
+    add.u64 %rd5, %rd1, %rd5;
+    cvta.to.global.u64 %rd5, %rd5;
+
+    // Latency output address
+    mul.wide.u32 %rd6, %r4, 8;
+    add.u64 %rd6, %rd2, %rd6;
+    cvta.to.global.u64 %rd6, %rd6;
+
+    // --- MEASUREMENT: GPU-scope atomic ---
+    mov.u64 %clock_before, %clock64;
+    atom.global.gpu.add.u32 %result, [%rd5], 1;
+    mov.u64 %clock_after, %clock64;
+
+    sub.u64 %latency_val, %clock_after, %clock_before;
+    st.global.u64 [%rd6], %latency_val;
+
+DONE_GPU:
+    ret;
+}
+
+//
+// Kernel: uma_atomic_sys_kernel
+// System-scope atomic — atom.global.sys
+// On GB10: must traverse NVLink-C2C coherence protocol
+//
+.visible .entry uma_atomic_sys_kernel(
+    .param .u64 param_data,
+    .param .u64 param_latency,
+    .param .u64 param_n
+)
+{
+    .reg .u64 %rd<8>;
+    .reg .u32 %r<6>;
+    .reg .u32 %result;
+    .reg .u64 %clock_before;
+    .reg .u64 %clock_after;
+    .reg .u64 %latency_val;
+    .reg .pred %p0;
+
+    ld.param.u64 %rd1, [param_data];
+    ld.param.u64 %rd2, [param_latency];
+    ld.param.u64 %rd3, [param_n];
+
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ntid.x;
+    mov.u32 %r3, %ctaid.x;
+    mad.lo.u32 %r4, %r3, %r2, %r1;
+
+    cvt.u64.u32 %rd4, %r4;
+    setp.ge.u64 %p0, %rd4, %rd3;
+    @%p0 bra DONE_SYS;
+
+    mul.wide.u32 %rd5, %r4, 4;
+    add.u64 %rd5, %rd1, %rd5;
+    cvta.to.global.u64 %rd5, %rd5;
+
+    mul.wide.u32 %rd6, %r4, 8;
+    add.u64 %rd6, %rd2, %rd6;
+    cvta.to.global.u64 %rd6, %rd6;
+
+    // --- MEASUREMENT: system-scope atomic ---
+    mov.u64 %clock_before, %clock64;
+    atom.global.sys.add.u32 %result, [%rd5], 1;
+    mov.u64 %clock_after, %clock64;
+
+    sub.u64 %latency_val, %clock_after, %clock_before;
+    st.global.u64 [%rd6], %latency_val;
+
+DONE_SYS:
+    ret;
+}
