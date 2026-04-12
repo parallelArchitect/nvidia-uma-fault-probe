@@ -135,15 +135,15 @@ static Platform detect_platform(int device) {
 
     if (hpt && prop.concurrentManagedAccess) {
         p.type       = PLAT_HW_COHERENT_UMA;
-        p.peak_bw_gbs = 273.0;   /* GB10 LPDDR5X 8533 MT/s 256-bit */
+        p.peak_bw_gbs = 0.0;   /* Memory clock N/A on GB10 driver 580.142 confirmed. Peak omitted. */
     } else if (prop.concurrentManagedAccess) {
         p.type = PLAT_DISCRETE_PCIE;
         /* Estimate peak by SM generation */
-        if      (prop.major == 6) p.peak_bw_gbs = 484.0;  /* Pascal GDDR5X  */
-        else if (prop.major == 7) p.peak_bw_gbs = 900.0;  /* Volta HBM2     */
-        else if (prop.major == 8) p.peak_bw_gbs = 936.0;  /* Ampere         */
-        else if (prop.major == 9) p.peak_bw_gbs = 3350.0; /* Hopper HBM3    */
-        else                      p.peak_bw_gbs = 500.0;  /* unknown        */
+        int bus_bits = 0, mem_khz = 0;
+        cudaDeviceGetAttribute(&bus_bits, cudaDevAttrGlobalMemoryBusWidth, device);
+        cudaDeviceGetAttribute(&mem_khz, cudaDevAttrMemoryClockRate, device);
+        p.peak_bw_gbs = (bus_bits > 0 && mem_khz > 0) ?
+            2.0 * (bus_bits / 8.0) * mem_khz * 1000.0 / 1e9 : 0.0;
     } else {
         p.type        = PLAT_SOFTWARE_UMA;
         p.peak_bw_gbs = 0.0;
@@ -163,7 +163,7 @@ static const char *plat_name(PlatformType t) {
 static const char *plat_note(PlatformType t) {
     switch(t) {
     case PLAT_HW_COHERENT_UMA:
-        return "HW_COHERENT_UMA: One LPDDR5X pool. NVLink-C2C. 273 GB/s shared peak.";
+        return "HW_COHERENT_UMA: One LPDDR5X pool. NVLink-C2C. Peak BW not reported (memory clock N/A on this platform).";
     case PLAT_DISCRETE_PCIE:
         return "DISCRETE_PCIE: Separate VRAM. CPU via PCIe. PTX .cs = true DRAM write BW.";
     case PLAT_SOFTWARE_UMA:

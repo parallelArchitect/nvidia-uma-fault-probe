@@ -107,11 +107,12 @@ uma_probe:
 uma_bw:
   GPU      : NVIDIA GeForce GTX 1080 (SM 6.1)
   Platform : DISCRETE_PCIE
-  GPU read  : 248.51 GB/s  stddev 0.06
-  GPU write : 251.67 GB/s  (PTX .cs not fully honored on SM6.1 — Pascal behavior)
-  GPU copy  :   8.76 GB/s
-  CPU read  :   5.18 GB/s  (PCIe bottleneck)
-  CPU write :  19.08 GB/s
+  GPU read  : 248.91 GB/s  stddev 0.07
+  GPU write : 254.16 GB/s  stddev 0.03  (PTX .cs not fully honored on SM6.1 — Pascal behavior)
+  GPU copy  :   7.69 GB/s
+  CPU read  :   5.23 GB/s  (PCIe bottleneck)
+  CPU write :  22.69 GB/s
+  Peak      : 320.32 GB/s  (derived from hardware: 256-bit bus, 5005 MHz)
 
 Pascal note: PTX .cs (cache streaming, L2 bypass) is a hint not a guarantee
 on SM6.x. On Volta+ (SM7.0 and above) .cs produces true DRAM write bandwidth.
@@ -127,7 +128,7 @@ https://github.com/parallelArchitect/nvidia-uma-fault-probe/issues
 
 Expected GB10 values based on hardware specification:
 - uma_probe COLD/WARM ratio: 20-100x
-- uma_bw GPU read: 200-270 GB/s (LPDDR5X peak 273 GB/s)
+- uma_bw GPU read: community data needed — peak BW not derivable from driver on this platform
 - uma_bw CPU read: 50-100 GB/s (native Grace CPU access, not PCIe)
 
 ## Relationship to cuda-unified-memory-analyzer

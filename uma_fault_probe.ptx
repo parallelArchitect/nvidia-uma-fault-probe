@@ -1,7 +1,7 @@
 //
 // uma_fault_probe.ptx
 // UMA Page Fault Latency Probe for GB10 and discrete GPU platforms
-// Target: compute_80+ (JIT compiled to sm_120 on GB10 by driver)
+// Target: compute_60 (PTX portable — JIT compiled to native SASS by driver at runtime)
 // Author: parallelArchitect
 //
 // What this measures:
