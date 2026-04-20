@@ -186,14 +186,14 @@ static PassResult run_pass(CUfunction kernel,
         if (verbose) printf("done\n");
     } else if (pass == PASS_WARM) {
         if (verbose) { printf("  prefetching to GPU... "); fflush(stdout); }
-        CUDA_CHECK(cudaMemPrefetchAsync(data, n*sizeof(float), device, 0));
+        CUDA_CHECK(cudaMemPrefetchAsync(data, n*sizeof(float), device, cudaStreamDefault));
         CUDA_CHECK(cudaDeviceSynchronize());
         if (verbose) printf("done\n");
     } else {
         if (verbose) { printf("  mixed CPU/GPU residency... "); fflush(stdout); }
         for (size_t i = 0; i < n/2; i++) data[i] = (float)i;
         CUDA_CHECK(cudaMemPrefetchAsync(data + n/2,
-                   (n/2)*sizeof(float), device, 0));
+                   (n/2)*sizeof(float), device, cudaStreamDefault));
         CUDA_CHECK(cudaDeviceSynchronize());
         if (verbose) printf("done\n");
     }
