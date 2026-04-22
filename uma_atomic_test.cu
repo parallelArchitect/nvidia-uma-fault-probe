@@ -139,16 +139,28 @@ typedef struct {
 /* PTX loader                                                           */
 /* ------------------------------------------------------------------ */
 
-static CUfunction load_ptx_fn(const char *path, const char *fn) {
+static CUfunction load_ptx_fn(const char *path, const char *fn, int sm_major, int sm_minor) {
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "Cannot open %s\n", path); exit(1); }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f); rewind(f);
-    char *src = (char*)malloc(sz + 1);
+    char *src = (char*)malloc(sz + 64);
     size_t nr = fread(src, 1, sz, f);
     (void)nr;
     src[sz] = '\0';
     fclose(f);
+    char new_target[32], new_version[16];
+    snprintf(new_target, sizeof(new_target), ".target sm_%d%d", sm_major, sm_minor);
+    float ptx_ver = 6.0f;
+    if (sm_major >= 12) ptx_ver = 8.5f;
+    else if (sm_major >= 9)  ptx_ver = 8.0f;
+    else if (sm_major >= 8)  ptx_ver = 7.0f;
+    else if (sm_major >= 7)  ptx_ver = 6.3f;
+    snprintf(new_version, sizeof(new_version), ".version %.1f", ptx_ver);
+    char *t = strstr(src, ".target ");
+    if (t) { char *eol = strchr(t, '\n'); if (eol) { int ol = eol-t; int nl = strlen(new_target); memmove(t+nl, t+ol, strlen(t+ol)+1); memcpy(t, new_target, nl); } }
+    char *v = strstr(src, ".version ");
+    if (v) { char *eol = strchr(v, '\n'); if (eol) { int ol = eol-v; int nl = strlen(new_version); memmove(v+nl, v+ol, strlen(v+ol)+1); memcpy(v, new_version, nl); } }
     CUmodule mod;
     CU_CHECK(cuModuleLoadData(&mod, src));
     free(src);
@@ -170,8 +182,14 @@ static PassResult run_pass(CUfunction kernel,
     CUDA_CHECK(cudaMemset(lat,  0, n * sizeof(uint64_t)));
 
     if (prefetch_to_gpu) {
+        #if CUDART_VERSION >= 12020
+        cudaMemLocation loc1 = {cudaMemLocationTypeDevice, device};
+        CUDA_CHECK(cudaMemPrefetchAsync(data,
+                   n * sizeof(uint32_t), loc1, 0));
+#else
         CUDA_CHECK(cudaMemPrefetchAsync(data,
                    n * sizeof(uint32_t), device, 0));
+#endif
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
@@ -347,9 +365,11 @@ int main(int argc, char **argv) {
 
     /* Load PTX kernels */
     CUfunction kernel_gpu = load_ptx_fn("uma_atomic_probe.ptx",
-                                         "uma_atomic_gpu_kernel");
+                                         "uma_atomic_gpu_kernel",
+                                         p.sm_major, p.sm_minor);
     CUfunction kernel_sys = load_ptx_fn("uma_atomic_probe.ptx",
-                                         "uma_atomic_sys_kernel");
+                                         "uma_atomic_sys_kernel",
+                                         p.sm_major, p.sm_minor);
 
     PassResult gpu_scope = {}, sys_scope = {}, contention = {};
 
@@ -388,8 +408,14 @@ int main(int argc, char **argv) {
     if (verbose) { printf("CONTENTION pass (sys-scope + CPU concurrent):\n"); fflush(stdout); }
 
     /* Prefetch half to GPU, leave half CPU-accessible */
+    #if CUDART_VERSION >= 12020
+    cudaMemLocation loc2 = {cudaMemLocationTypeDevice, device};
+    CUDA_CHECK(cudaMemPrefetchAsync(data,
+               (N_ELEMENTS/2) * sizeof(uint32_t), loc2, 0));
+#else
     CUDA_CHECK(cudaMemPrefetchAsync(data,
                (N_ELEMENTS/2) * sizeof(uint32_t), device, 0));
+#endif
     CUDA_CHECK(cudaMemPrefetchAsync(data + N_ELEMENTS/2,
                (N_ELEMENTS/2) * sizeof(uint32_t), cudaCpuDeviceId, 0));
     CUDA_CHECK(cudaDeviceSynchronize());

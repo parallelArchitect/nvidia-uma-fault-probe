@@ -423,8 +423,15 @@ int main(int argc, char **argv) {
 
     /* --- GPU side --- */
     if (!json_only) printf("--- GPU (prefetched to GPU) ---\n");
+    #if CUDART_VERSION >= 12020
+    cudaMemLocation loc_a = {cudaMemLocationTypeDevice, device};
+    cudaMemLocation loc_b = {cudaMemLocationTypeDevice, device};
+    CUDA_CHECK(cudaMemPrefetchAsync(buf_a, BUFFER_BYTES, loc_a, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(buf_b, BUFFER_BYTES, loc_b, 0));
+#else
     CUDA_CHECK(cudaMemPrefetchAsync(buf_a, BUFFER_BYTES, device, 0));
     CUDA_CHECK(cudaMemPrefetchAsync(buf_b, BUFFER_BYTES, device, 0));
+#endif
     CUDA_CHECK(cudaDeviceSynchronize());
 
     /* GPU read */
@@ -492,8 +499,14 @@ int main(int argc, char **argv) {
 
     /* --- Concurrent CPU + GPU --- */
     if (!json_only) { printf("--- Concurrent CPU + GPU ---\n"); printf("measuring...\n"); fflush(stdout); }
+    #if CUDART_VERSION >= 12020
+    cudaMemLocation loc_c = {cudaMemLocationTypeDevice, device};
+    CUDA_CHECK(cudaMemPrefetchAsync(buf_a,
+               BUFFER_BYTES/2, loc_c, 0));
+#else
     CUDA_CHECK(cudaMemPrefetchAsync(buf_a,
                BUFFER_BYTES/2, device, 0));
+#endif
     CUDA_CHECK(cudaMemPrefetchAsync(buf_a + n/2,
                BUFFER_BYTES/2, cudaCpuDeviceId, 0));
     CUDA_CHECK(cudaDeviceSynchronize());

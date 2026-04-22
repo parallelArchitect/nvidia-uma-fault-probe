@@ -20,8 +20,8 @@
 // No CUPTI. No NVML. Ground truth from inside the kernel.
 //
 
-.version 6.0
-.target compute_60
+.version 7.0
+.target sm_70
 .address_size 64
 
 //
