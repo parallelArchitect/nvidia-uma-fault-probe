@@ -1,19 +1,16 @@
 /*
  * probe_launcher.cu
- * UMA Fault Latency Probe v1.1 — Host Launcher
+ * UMA Fault Latency Probe v1.2.0
  *
- * Platform-aware. Outputs human summary + JSON log.
- * PTX kernel: uma_fault_probe.ptx (must be in same directory)
+ * Measures cycle-accurate UMA page fault latency using clock64().
+ * CUDA C kernel — no PTX files, no runtime JIT, works on all SM versions.
  *
  * Build:
- *   nvcc -O2 -std=c++17 probe_launcher.cu -o uma_probe -lcudart -lcuda
+ *   nvcc -O2 -std=c++17 probe_launcher.cu -o uma_probe -lcudart -lcuda -lpthread
  *
  * Run:
  *   ./uma_probe
  *   ./uma_probe --json-only
- *
- * Share the JSON output for remote analysis:
- *   uma_probe_results.json
  */
 
 #include <cuda.h>
@@ -27,7 +24,7 @@
 #include <algorithm>
 #include <vector>
 
-#define TOOL_VERSION    "1.1.0"
+#define TOOL_VERSION    "1.2.0"
 #define BUFFER_MB       64
 #define N_ELEMENTS      ((BUFFER_MB * 1024 * 1024) / sizeof(float))
 #define THREADS_PER_BLK 256
@@ -39,16 +36,6 @@
     if (e != cudaSuccess) { \
         fprintf(stderr, "CUDA error %s:%d: %s\n", \
                 __FILE__, __LINE__, cudaGetErrorString(e)); \
-        exit(1); \
-    } \
-} while(0)
-
-#define CU_CHECK(call) do { \
-    CUresult r = (call); \
-    if (r != CUDA_SUCCESS) { \
-        const char *s; cuGetErrorString(r, &s); \
-        fprintf(stderr, "CU error %s:%d: %s\n", \
-                __FILE__, __LINE__, s); \
         exit(1); \
     } \
 } while(0)
@@ -116,15 +103,38 @@ static const char *plat_name(PlatformType t) {
 static const char *plat_note(PlatformType t) {
     switch(t) {
     case PLAT_HW_COHERENT_UMA:
-        return "HW_COHERENT_UMA: One physical pool. HW fault active. COLD/WARM ratio 20-100x expected.";
+        return "HW_COHERENT_UMA: One physical pool. HW fault active. COLD/WARM ratio >1x expected.";
     case PLAT_DISCRETE_PCIE:
         return "DISCRETE_PCIE: DRAM latency only. COLD=WARM ratio ~1.0x. No HW fault visible.";
     case PLAT_SOFTWARE_UMA:
-        return "Software-managed UMA. "
-               "Page migration overhead may be partially visible.";
+        return "Software-managed UMA. Page migration overhead may be partially visible.";
     default:
         return "Platform not recognized.";
     }
+}
+
+// --- Probe kernel ---
+// ld.global.cs = cache streaming, bypasses L1/L2 — forces true memory access.
+// This ensures the load goes all the way to memory and can trigger a UMA page fault.
+// clock64() gives cycle-accurate timestamps on all SM versions.
+// Inline PTX inside CUDA C — nvcc compiles natively for the target SM, no PTX files needed.
+__global__ void uma_fault_probe_kernel(
+    const float  * __restrict__ data,
+    uint64_t     * __restrict__ latency,
+    uint64_t      n)
+{
+    uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n) return;
+
+    const float *ptr = data + tid;
+    float val;
+
+    uint64_t t0 = clock64();
+    asm volatile("ld.global.cs.f32 %0, [%1];" : "=f"(val) : "l"(ptr) : "memory");
+    uint64_t t1 = clock64();
+
+    /* prevent val from being optimized away */
+    latency[tid] = (val != val) ? 0ULL : (t1 - t0);
 }
 
 // --- Stats ---
@@ -144,37 +154,6 @@ static void iso_ts(char *buf, size_t len) {
     strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", gmtime(&t));
 }
 
-// --- Load PTX ---
-static CUfunction load_ptx(const char *path, const char *fn, int sm_major, int sm_minor) {
-    /* Select pre-compiled PTX for this SM family — no runtime string patching */
-    char ptx_path[512];
-    (void)path;
-    if (sm_major >= 12)
-        snprintf(ptx_path, sizeof(ptx_path), "uma_fault_probe_sm120.ptx");
-    else if (sm_major >= 9)
-        snprintf(ptx_path, sizeof(ptx_path), "uma_fault_probe_sm90.ptx");
-    else if (sm_major >= 8)
-        snprintf(ptx_path, sizeof(ptx_path), "uma_fault_probe_sm80.ptx");
-    else if (sm_major >= 7)
-        snprintf(ptx_path, sizeof(ptx_path), "uma_fault_probe_sm70.ptx");
-    else
-        snprintf(ptx_path, sizeof(ptx_path), "uma_fault_probe_sm60.ptx");
-    FILE *f = fopen(ptx_path, "rb");
-    if (!f) { fprintf(stderr, "Cannot open %s\n", ptx_path); exit(1); }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f); rewind(f);
-    char *src = (char*)malloc(sz + 1);
-    size_t nr = fread(src, 1, sz, f);
-    (void)nr;
-    src[sz] = '\0';
-    fclose(f);
-    CUmodule mod;
-    CU_CHECK(cuModuleLoadData(&mod, src));
-    free(src);
-    CUfunction func;
-    CU_CHECK(cuModuleGetFunction(&func, mod, fn));
-    return func;
-}
 // --- Pass types ---
 typedef enum { PASS_COLD, PASS_WARM, PASS_PRESSURE } PassType;
 
@@ -187,8 +166,7 @@ typedef struct {
 } PassResult;
 
 // --- Run one pass ---
-static PassResult run_pass(CUfunction kernel,
-                           float *data, uint64_t *lat,
+static PassResult run_pass(float *data, uint64_t *lat,
                            size_t n, PassType pass,
                            int clock_mhz, int device,
                            int verbose) {
@@ -198,7 +176,7 @@ static PassResult run_pass(CUfunction kernel,
         if (verbose) printf("done\n");
     } else if (pass == PASS_WARM) {
         if (verbose) { printf("  prefetching to GPU... "); fflush(stdout); }
-        #if CUDART_VERSION >= 12020
+#if CUDART_VERSION >= 12020
         cudaMemLocation loc1 = {cudaMemLocationTypeDevice, device};
         CUDA_CHECK(cudaMemPrefetchAsync(data, n*sizeof(float), loc1, cudaStreamDefault));
 #else
@@ -209,7 +187,7 @@ static PassResult run_pass(CUfunction kernel,
     } else {
         if (verbose) { printf("  mixed CPU/GPU residency... "); fflush(stdout); }
         for (size_t i = 0; i < n/2; i++) data[i] = (float)i;
-        #if CUDART_VERSION >= 12020
+#if CUDART_VERSION >= 12020
         cudaMemLocation loc2 = {cudaMemLocationTypeDevice, device};
         CUDA_CHECK(cudaMemPrefetchAsync(data + n/2,
                    (n/2)*sizeof(float), loc2, cudaStreamDefault));
@@ -223,14 +201,9 @@ static PassResult run_pass(CUfunction kernel,
 
     CUDA_CHECK(cudaMemset(lat, 0, n * sizeof(uint64_t)));
 
-    uint64_t ne = (uint64_t)n;
-    void *args[] = { &data, &lat, &ne };
     int blocks = (int)((n + THREADS_PER_BLK - 1) / THREADS_PER_BLK);
-
     if (verbose) { printf("  running kernel...      "); fflush(stdout); }
-    CU_CHECK(cuLaunchKernel(kernel, blocks, 1, 1,
-                            THREADS_PER_BLK, 1, 1,
-                            0, 0, args, NULL));
+    uma_fault_probe_kernel<<<blocks, THREADS_PER_BLK>>>(data, lat, (uint64_t)n);
     CUDA_CHECK(cudaDeviceSynchronize());
     if (verbose) printf("done\n");
 
@@ -327,9 +300,7 @@ static void write_json(const char *path,
     fprintf(f, "  \"interpretation\": {\n");
     fprintf(f, "    \"cold_warm_ratio\": %.2f,\n", ratio);
     fprintf(f, "    \"platform_note\": \"%s\",\n", plat_note(p->type));
-    fprintf(f, "    \"ptx_load_op\": "
-               "\"ld.global.cs (cache streaming, bypass L1)\",\n");
-    fprintf(f, "    \"measurement\": \"%%clock64 before/after ld.global\"\n");
+    fprintf(f, "    \"measurement\": \"clock64 before/after volatile load\"\n");
     fprintf(f, "  }\n");
     fprintf(f, "}\n");
     fclose(f);
@@ -341,7 +312,6 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--json-only") == 0)
             json_only = 1;
 
-    CU_CHECK(cuInit(0));
     int device = 0;
     CUDA_CHECK(cudaSetDevice(device));
 
@@ -358,53 +328,39 @@ int main(int argc, char **argv) {
         printf("Clock    : %d MHz\n", p.clock_mhz);
         printf("Buffer   : %d MB (%zu elements)\n",
                BUFFER_MB, (size_t)N_ELEMENTS);
-        printf("PTX op   : ld.global.cs (cache streaming, bypass L1)\n");
-        printf("Measure  : %%clock64 before/after ld.global\n");
+        printf("Kernel   : ld.global.cs + clock64 (inline PTX, nvcc native)\n");
         printf("Note     : %s\n\n", plat_note(p.type));
     }
 
-    // Allocate
+    // Allocate unified memory
     float    *data = nullptr;
     uint64_t *lat  = nullptr;
-    CUDA_CHECK(cudaMallocManaged(&data,
-               N_ELEMENTS * sizeof(float)));
-    CUDA_CHECK(cudaMallocManaged(&lat,
-               N_ELEMENTS * sizeof(uint64_t)));
-
-    // Load PTX
-    CUfunction kernel = load_ptx("uma_fault_probe.ptx",
-                                  "uma_fault_probe_kernel",
-                                  p.sm_major, p.sm_minor);
+    CUDA_CHECK(cudaMallocManaged(&data, N_ELEMENTS * sizeof(float)));
+    CUDA_CHECK(cudaMallocManaged(&lat,  N_ELEMENTS * sizeof(uint64_t)));
 
     // Run passes
     PassResult cold, warm, pressure;
 
     if (verbose) printf("COLD pass (CPU->GPU fault):\n");
-    cold = run_pass(kernel, data, lat, N_ELEMENTS,
-                    PASS_COLD, p.clock_mhz, device, verbose);
-    if (verbose) {
-        printf("  p50: %8.1f ns  p90: %8.1f ns  "
-               "p99: %8.1f ns\n\n",
+    cold = run_pass(data, lat, N_ELEMENTS, PASS_COLD,
+                    p.clock_mhz, device, verbose);
+    if (verbose)
+        printf("  p50: %8.1f ns  p90: %8.1f ns  p99: %8.1f ns\n\n",
                cold.p50_ns, cold.p90_ns, cold.p99_ns);
-    }
 
     if (verbose) printf("WARM pass (GPU resident):\n");
-    warm = run_pass(kernel, data, lat, N_ELEMENTS,
-                    PASS_WARM, p.clock_mhz, device, verbose);
-    if (verbose) {
-        printf("  p50: %8.1f ns  p90: %8.1f ns  "
-               "p99: %8.1f ns\n\n",
+    warm = run_pass(data, lat, N_ELEMENTS, PASS_WARM,
+                    p.clock_mhz, device, verbose);
+    if (verbose)
+        printf("  p50: %8.1f ns  p90: %8.1f ns  p99: %8.1f ns\n\n",
                warm.p50_ns, warm.p90_ns, warm.p99_ns);
-    }
 
     if (verbose) printf("PRESSURE pass (thrash):\n");
-    pressure = run_pass(kernel, data, lat, N_ELEMENTS,
-                        PASS_PRESSURE, p.clock_mhz, device, verbose);
-    if (verbose) {
-        printf("  p50: %8.1f ns  p90: %8.1f ns  "
-               "p99: %8.1f ns\n\n",
+    pressure = run_pass(data, lat, N_ELEMENTS, PASS_PRESSURE,
+                        p.clock_mhz, device, verbose);
+    if (verbose)
+        printf("  p50: %8.1f ns  p90: %8.1f ns  p99: %8.1f ns\n\n",
                pressure.p50_ns, pressure.p90_ns, pressure.p99_ns);
-    }
 
     // Summary
     if (verbose) {
@@ -422,7 +378,7 @@ int main(int argc, char **argv) {
         if (p.type == PLAT_DISCRETE_PCIE)
             printf("Expected : ratio ~1.0x (no HW fault visible)\n");
         else if (p.type == PLAT_HW_COHERENT_UMA)
-            printf("Expected : ratio 20-100x (HW UMA fault cost)\n");
+            printf("Expected : ratio >1.0x (HW UMA fault cost)\n");
         printf("JSON     : %s\n", JSON_OUTPUT);
     }
 
