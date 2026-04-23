@@ -130,7 +130,7 @@ __global__ void uma_fault_probe_kernel(
     float val;
 
     uint64_t t0 = clock64();
-    asm volatile("ld.global.cs.f32 %0, [%1];" : "=f"(val) : "l"(ptr) : "memory");
+    asm volatile("ld.global.cv.f32 %0, [%1];" : "=f"(val) : "l"(ptr) : "memory");
     uint64_t t1 = clock64();
 
     /* prevent val from being optimized away */
@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
         printf("Clock    : %d MHz\n", p.clock_mhz);
         printf("Buffer   : %d MB (%zu elements)\n",
                BUFFER_MB, (size_t)N_ELEMENTS);
-        printf("Kernel   : ld.global.cs + clock64 (inline PTX, nvcc native)\n");
+        printf("Kernel   : ld.global.cv + clock64 (inline PTX, nvcc native)\n");
         printf("Note     : %s\n\n", plat_note(p.type));
     }
 
