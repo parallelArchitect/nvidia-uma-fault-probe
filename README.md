@@ -32,13 +32,7 @@ Three passes expose the full UMA behavior profile:
 | WARM     | GPU prefetch before launch | Resident access latency         |
 | PRESSURE | Mixed CPU/GPU residency    | Thrash latency                  |
 
-The COLD/WARM ratio is the key signal:
-
-| Platform                      | Ratio   | Meaning                                        |
-|-------------------------------|---------|------------------------------------------------|
-| Discrete PCIe (Pascal to Ada) | ~1.0x   | No hardware fault visible at instruction level |
-| Hardware-coherent UMA (GB10)  | 20-100x | True hardware migration cost                   |
-
+The COLD/WARM ratio is the key signal. Run the tool on your hardware — results vary by platform.
 ---
 
 ### uma_bw — UMA Bandwidth Test
@@ -213,7 +207,7 @@ Expected GB10 values based on architecture:
 
 | Tool       | Metric          | Expected                                              |
 |------------|-----------------|-------------------------------------------------------|
-| uma_probe  | COLD/WARM ratio | 20-100x                                               |
+| uma_probe  | COLD/WARM ratio | ~1.0x on GB10 (hardware coherent UMA, no page fault overhead measured) |
 | uma_bw     | GPU read        | community data needed (memory clock N/A from driver)  |
 | uma_bw     | CPU read        | 50-100 GB/s (native Grace CPU access, not PCIe)       |
 | uma_atomic | SYS/GPU ratio   | > 1.0x (NVLink-C2C coherence cost, unquantified)      |

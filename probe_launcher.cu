@@ -103,9 +103,9 @@ static const char *plat_name(PlatformType t) {
 static const char *plat_note(PlatformType t) {
     switch(t) {
     case PLAT_HW_COHERENT_UMA:
-        return "HW_COHERENT_UMA: One physical pool. HW fault active. COLD/WARM ratio >1x expected.";
+        return "HW_COHERENT_UMA: One physical pool. Hardware coherence active. Hardware coherence active.";
     case PLAT_DISCRETE_PCIE:
-        return "DISCRETE_PCIE: DRAM latency only. COLD=WARM ratio ~1.0x. No HW fault visible.";
+        return "DISCRETE_PCIE: DRAM latency only. Discrete PCIe — separate VRAM.";
     case PLAT_SOFTWARE_UMA:
         return "Software-managed UMA. Page migration overhead may be partially visible.";
     default:
@@ -375,10 +375,6 @@ int main(int argc, char **argv) {
                pressure.p50_ns, pressure.p50_cyc);
         printf("COLD/WARM ratio: %.2fx\n", ratio);
         printf("\nPlatform : %s\n", plat_name(p.type));
-        if (p.type == PLAT_DISCRETE_PCIE)
-            printf("Expected : ratio ~1.0x (no HW fault visible)\n");
-        else if (p.type == PLAT_HW_COHERENT_UMA)
-            printf("Expected : ratio >1.0x (HW UMA fault cost)\n");
         printf("JSON     : %s\n", JSON_OUTPUT);
     }
 

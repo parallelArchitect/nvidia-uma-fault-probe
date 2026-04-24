@@ -6,7 +6,7 @@
  * on unified managed memory. The delta between gpu-scope and sys-scope
  * is the NVLink-C2C coherence protocol cost on GB10.
  *
- * On discrete PCIe (Pascal to Ada): gpu-scope ~= sys-scope (~1.0x ratio)
+ * On discrete PCIe: gpu-scope typically ~= sys-scope
  * On hardware-coherent UMA (GB10):  sys-scope may differ from gpu-scope
  *
  * Inline PTX kernels — no PTX files, no runtime JIT, works on all SM versions.
@@ -324,7 +324,7 @@ static void write_json(const char *path,
     fprintf(f, "    \"platform_note\": \"%s\",\n",
             p->type == PLAT_HW_COHERENT_UMA ?
             "HW_COHERENT_UMA: sys/gpu ratio measures NVLink-C2C coherence cost." :
-            "DISCRETE_PCIE: sys/gpu ratio ~1.0x expected — no coherence protocol.");
+            "DISCRETE_PCIE: no coherence protocol.");
     fprintf(f, "    \"coherence_overhead_ns\": %.1f\n",
             sys_scope->p50_ns - gpu_scope->p50_ns);
     fprintf(f, "  }\n");
@@ -437,10 +437,6 @@ int main(int argc, char **argv) {
         printf("SYS/GPU ratio : %.2fx\n", ratio);
         printf("Coherence cost: %.1f ns overhead\n", overhead);
         printf("\nPlatform : %s\n", plat_name(p.type));
-        if (p.type == PLAT_DISCRETE_PCIE)
-            printf("Expected : ratio ~1.0x (no coherence protocol on discrete GPU)\n");
-        else if (p.type == PLAT_HW_COHERENT_UMA)
-            printf("Expected : ratio >= 1.0x (NVLink-C2C coherence cost on GB10)\n");
         printf("JSON     : %s\n", JSON_OUTPUT);
     }
 
