@@ -61,7 +61,10 @@ All notable changes to nvidia-uma-fault-probe are documented here.
 - uma_probe: CUDA C kernel with inline PTX ld.global.cv, no PTX files
 - uma_atomic: inline PTX scoped atomics, no PTX files (v1.1.0)
 - uma_bw: CUDA 13 compat verified, cudaCpuDeviceId guarded
-- All PTX files removed — nvcc compiles natively for target SM
+- All external .ptx files removed — inline PTX retained within CUDA kernels
+- nvcc compiles inline PTX natively for target SM, JIT on future architectures
+- Same instruction-level measurement semantics preserved (ld.global.cv, %clock64, atom.global.gpu/sys)
+- Simplifies build — no manual PTX loading, full forward compatibility via CUDA JIT path
 - CUDA 13 cudaMemPrefetchAsync API compat across all three tools
 
 ### Validated
@@ -78,7 +81,10 @@ All notable changes to nvidia-uma-fault-probe are documented here.
 - uma_probe: CUDA C kernel with inline PTX ld.global.cv, no PTX files
 - uma_atomic: inline PTX scoped atomics, no PTX files (v1.1.0)
 - uma_bw: CUDA 13 compat verified, cudaCpuDeviceId guarded
-- All PTX files removed — nvcc compiles natively for target SM
+- All external .ptx files removed — inline PTX retained within CUDA kernels
+- nvcc compiles inline PTX natively for target SM, JIT on future architectures
+- Same instruction-level measurement semantics preserved (ld.global.cv, %clock64, atom.global.gpu/sys)
+- Simplifies build — no manual PTX loading, full forward compatibility via CUDA JIT path
 - CUDA 13 cudaMemPrefetchAsync API compat across all three tools
 
 ### Validated
